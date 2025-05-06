@@ -15,13 +15,16 @@ use reth_metrics::{metrics::Gauge, Metrics};
 use reth_primitives_traits::{
     BlockBody as _, NodePrimitives, RecoveredBlock, SealedBlock, SealedHeader, SignedTransaction,
 };
-use reth_storage_api::StateProviderBox;
+use reth_storage_api::{CacheMode, ConsistentMemory, GlobalConsistentMemory, StateMemory, StateProviderBox};
 use reth_trie::{updates::TrieUpdates, HashedPostState};
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use revm_database::OriginalValuesKnown;
 use tokio::sync::{broadcast, watch};
 
 /// Size of the broadcast channel used to notify canonical state events.
 const CANON_STATE_NOTIFICATION_CHANNEL_SIZE: usize = 256;
+const CANON_STATE_MEMORY_SIZE: u64 = 10240000;
+const CANON_MERKLE_MEMORY_SIZE: u64 = 10240000;
 
 /// Metrics for the in-memory state.
 #[derive(Metrics)]
@@ -139,9 +142,20 @@ pub(crate) struct CanonicalInMemoryStateInner<N: NodePrimitives> {
     pub(crate) in_memory_state: InMemoryState<N>,
     /// A broadcast stream that emits events when the canonical chain is updated.
     pub(crate) canon_state_notification_sender: CanonStateNotificationSender<N>,
+    /// A global cache to speed up parallel execution
+    pub(crate) global_latest_memory: GlobalConsistentMemory,
 }
 
 impl<N: NodePrimitives> CanonicalInMemoryStateInner<N> {
+    fn update_global_latest_memory(&self, mut persisted_blocks: Vec<ExecutedBlockWithTrieUpdates<N>>) {
+        persisted_blocks.sort_unstable_by_key(|block| block.recovered_block().number());
+        for persisted_block in persisted_blocks {
+            self.global_latest_memory.update_global_memory(
+                persisted_block.recovered_block.number(),
+                persisted_block.execution_output.bundle.to_plain_state(OriginalValuesKnown::No));
+        }
+    }
+
     /// Clears all entries in the in memory state.
     fn clear(&self) {
         {
@@ -153,6 +167,7 @@ impl<N: NodePrimitives> CanonicalInMemoryStateInner<N> {
             self.in_memory_state.pending.send_modify(|p| {
                 p.take();
             });
+            self.global_latest_memory.clear();
         }
         self.in_memory_state.update_metrics();
     }
@@ -192,6 +207,7 @@ impl<N: NodePrimitives> CanonicalInMemoryState<N> {
                 chain_info_tracker,
                 in_memory_state,
                 canon_state_notification_sender,
+                global_latest_memory: GlobalConsistentMemory::new(CANON_STATE_MEMORY_SIZE, CANON_MERKLE_MEMORY_SIZE, CacheMode::ReadWrite),
             }),
         }
     }
@@ -212,10 +228,13 @@ impl<N: NodePrimitives> CanonicalInMemoryState<N> {
         let in_memory_state = InMemoryState::default();
         let (canon_state_notification_sender, _) =
             broadcast::channel(CANON_STATE_NOTIFICATION_CHANNEL_SIZE);
+        let global_state_memory = GlobalConsistentMemory::new(
+            CANON_STATE_MEMORY_SIZE, CANON_MERKLE_MEMORY_SIZE, CacheMode::ReadWrite);
         let inner = CanonicalInMemoryStateInner {
             chain_info_tracker,
             in_memory_state,
             canon_state_notification_sender,
+            global_latest_memory: global_state_memory,
         };
 
         Self { inner: Arc::new(inner) }
@@ -330,13 +349,26 @@ impl<N: NodePrimitives> CanonicalInMemoryState<N> {
             // clear all numbers
             numbers.clear();
 
-            // drain all blocks and only keep the ones that are not persisted (below the persisted
-            // height)
-            let mut old_blocks = blocks
-                .drain()
-                .filter(|(_, b)| b.block_ref().recovered_block().number() > persisted_height)
-                .map(|(_, b)| b.block.clone())
-                .collect::<Vec<_>>();
+            // // drain all blocks and only keep the ones that are not persisted (below the persisted
+            // // height)
+            // let mut old_blocks = blocks
+            //     .drain()
+            //     .filter(|(_, b)| b.block_ref().recovered_block().number() > persisted_height)
+            //     .map(|(_, b)| b.block.clone())
+            //     .collect::<Vec<_>>();
+
+            // TODO(metis@ceasar): refactor the structure of blocks later
+            let mut persisted_blocks = Vec::new();
+            let mut old_blocks = Vec::new();
+
+            for (_, b) in blocks.drain() {
+                if b.block_ref().recovered_block().number() > persisted_height {
+                    old_blocks.push(b.block.clone());
+                } else {
+                    persisted_blocks.push(b.block.clone());
+                }
+            }
+            self.inner.update_global_latest_memory(persisted_blocks);
 
             // sort the blocks by number so we can insert them back in natural order (low -> high)
             old_blocks.sort_unstable_by_key(|block| block.recovered_block().number());
@@ -396,6 +428,10 @@ impl<N: NodePrimitives> CanonicalInMemoryState<N> {
         self.inner.chain_info_tracker.chain_info()
     }
 
+    pub fn global_latest_memory(&self) -> &GlobalConsistentMemory {
+        &self.inner.global_latest_memory
+    }
+
     /// Returns the latest canonical block number.
     pub fn get_canonical_block_number(&self) -> u64 {
         self.inner.chain_info_tracker.get_canonical_block_number()
@@ -440,7 +476,6 @@ impl<N: NodePrimitives> CanonicalInMemoryState<N> {
     pub fn set_safe(&self, header: SealedHeader<N::BlockHeader>) {
         self.inner.chain_info_tracker.set_safe(header);
     }
-
     /// Finalized head setter.
     pub fn set_finalized(&self, header: SealedHeader<N::BlockHeader>) {
         self.inner.chain_info_tracker.set_finalized(header);
@@ -710,7 +745,6 @@ impl<N: NodePrimitives> BlockState<N> {
     /// the head of. This includes all blocks that connect back to the canonical block on disk.
     pub fn state_provider(&self, historical: StateProviderBox) -> MemoryOverlayStateProvider<N> {
         let in_memory = self.chain().map(|block_state| block_state.block()).collect();
-
         MemoryOverlayStateProvider::new(historical, in_memory)
     }
 

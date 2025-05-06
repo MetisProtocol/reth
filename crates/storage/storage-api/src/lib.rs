@@ -92,4 +92,7 @@ mod primitives;
 pub use primitives::*;
 
 mod block_indices;
+mod global_memory;
+pub use global_memory::*;
+
 pub use block_indices::*;

@@ -293,7 +293,7 @@ where
 
         self.ensure_consistency(provider, input.checkpoint().block_number, None)?;
 
-        let db = StateProviderDatabase(LatestStateProviderRef::new(provider));
+        let db = StateProviderDatabase(LatestStateProviderRef::new(provider, None));
         let mut executor = self.executor_provider.executor(db);
 
         // Progress tracking

@@ -22,10 +22,7 @@ use reth_primitives_traits::{RecoveredBlock, SealedBlock, SealedHeader};
 use reth_prune_types::{PruneCheckpoint, PruneModes, PruneSegment};
 use reth_stages_types::{StageCheckpoint, StageId};
 use reth_static_file_types::StaticFileSegment;
-use reth_storage_api::{
-    BlockBodyIndicesProvider, NodePrimitivesProvider, OmmersProvider, StateCommitmentProvider,
-    TryIntoHistoricalStateProvider,
-};
+use reth_storage_api::{BlockBodyIndicesProvider, GlobalConsistentMemory, NodePrimitivesProvider, OmmersProvider, StateCommitmentProvider, TryIntoHistoricalStateProvider};
 use reth_storage_errors::provider::ProviderResult;
 use reth_trie::HashedPostState;
 use reth_trie_db::StateCommitment;
@@ -170,7 +167,7 @@ impl<N: ProviderNodeTypes> ProviderFactory<N> {
     #[track_caller]
     pub fn latest(&self) -> ProviderResult<StateProviderBox> {
         trace!(target: "providers::db", "Returning latest state provider");
-        Ok(Box::new(LatestStateProvider::new(self.database_provider_ro()?)))
+        Ok(Box::new(LatestStateProvider::new(self.database_provider_ro()?, None)))
     }
 
     /// Storage provider for state at that given block
@@ -178,20 +175,22 @@ impl<N: ProviderNodeTypes> ProviderFactory<N> {
         &self,
         block_number: BlockNumber,
     ) -> ProviderResult<StateProviderBox> {
-        let state_provider = self.provider()?.try_into_history_at_block(block_number)?;
+        let state_provider = self.provider()?.try_into_history_at_block(block_number, None)?;
         trace!(target: "providers::db", ?block_number, "Returning historical state provider for block number");
         Ok(state_provider)
     }
 
     /// Storage provider for state at that given block hash
-    pub fn history_by_block_hash(&self, block_hash: BlockHash) -> ProviderResult<StateProviderBox> {
+    pub fn history_by_block_hash(&self, block_hash: BlockHash,
+                                 global_latest_memory: &GlobalConsistentMemory)
+                                 -> ProviderResult<StateProviderBox> {
         let provider = self.provider()?;
 
         let block_number = provider
             .block_number(block_hash)?
             .ok_or(ProviderError::BlockHashNotFound(block_hash))?;
 
-        let state_provider = provider.try_into_history_at_block(block_number)?;
+        let state_provider = provider.try_into_history_at_block(block_number, Some(global_latest_memory))?;
         trace!(target: "providers::db", ?block_number, %block_hash, "Returning historical state provider for block hash");
         Ok(state_provider)
     }

@@ -693,6 +693,9 @@ visibility = "0.1.1"
 walkdir = "2.3.3"
 vergen-git2 = "1.0.5"
 
+# metis-sdk
+moka = "0.12"
+
 # [patch.crates-io]
 # alloy-consensus = { git = "https://github.com/alloy-rs/alloy", rev = "cfb13aa" }
 # alloy-contract = { git = "https://github.com/alloy-rs/alloy", rev = "cfb13aa" }

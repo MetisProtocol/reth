@@ -9911,6 +9911,8 @@ dependencies = [
  "alloy-primitives 1.0.0",
  "alloy-rpc-types-engine",
  "auto_impl",
+ "log",
+ "moka",
  "reth-chainspec",
  "reth-db-api",
  "reth-db-models",
@@ -9923,6 +9925,7 @@ dependencies = [
  "reth-trie-common",
  "reth-trie-db",
  "revm-database",
+ "tracing",
 ]
 
 [[package]]
