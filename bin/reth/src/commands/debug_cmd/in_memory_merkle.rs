@@ -144,7 +144,7 @@ impl<C: ChainSpecParser<ChainSpec = ChainSpec>> Command<C> {
         .notify(|err, _| warn!(target: "reth::cli", "Error requesting body: {err}. Retrying..."))
         .await?;
 
-        // TODO(brain@lazai): refactor it later
+        // TODO(brain@lazai): It could also use global memory later
         let state_provider = LatestStateProviderRef::new(&provider, None);
         let db = StateProviderDatabase::new(&state_provider);
 

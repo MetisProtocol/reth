@@ -182,7 +182,7 @@ impl<N: ProviderNodeTypes> ProviderFactory<N> {
 
     /// Storage provider for state at that given block hash
     pub fn history_by_block_hash(&self, block_hash: BlockHash,
-                                 global_latest_memory: &GlobalConsistentMemory)
+                                 global_latest_memory: GlobalConsistentMemory)
                                  -> ProviderResult<StateProviderBox> {
         let provider = self.provider()?;
 

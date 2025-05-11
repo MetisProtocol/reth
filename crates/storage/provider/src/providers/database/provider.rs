@@ -369,14 +369,14 @@ impl<TX: DbTx + 'static, N: NodeTypes> TryIntoHistoricalStateProvider for Databa
     fn try_into_history_at_block(
         self,
         mut block_number: BlockNumber,
-        global_latest_memory: Option<&GlobalConsistentMemory>,
+        global_latest_memory: Option<GlobalConsistentMemory>,
     ) -> ProviderResult<StateProviderBox> {
         // if the block number is the same as the currently best block number on disk we can use the
         // latest state provider here
         if block_number == self.best_block_number().unwrap_or_default() {
              // debug!("block_number is {} and self.best_block_number() is {}", block_number, self.best_block_number().unwrap_or_default());
-            let cloned_memory = global_latest_memory.map(|m| m.clone());
-            return Ok(Box::new(LatestStateProvider::new(self, cloned_memory)))
+            let memory = global_latest_memory.clone();
+            return Ok(Box::new(LatestStateProvider::new(self, memory)))
         }
 
         // +1 as the changeset that we want is the one that was applied after this block.

@@ -150,9 +150,16 @@ impl<N: NodePrimitives> CanonicalInMemoryStateInner<N> {
     fn update_global_latest_memory(&self, mut persisted_blocks: Vec<ExecutedBlockWithTrieUpdates<N>>) {
         persisted_blocks.sort_unstable_by_key(|block| block.recovered_block().number());
         for persisted_block in persisted_blocks {
-            self.global_latest_memory.update_global_memory(
-                persisted_block.recovered_block.number(),
-                persisted_block.execution_output.bundle.to_plain_state(OriginalValuesKnown::No));
+            let block_number = persisted_block.recovered_block().number();
+            if let Err(e) = self.global_latest_memory.update_global_memory(
+                block_number,
+                persisted_block.execution_output.bundle.to_plain_state(OriginalValuesKnown::No)) {
+                tracing::error!(
+                    target: "global_memory",
+                    "Failed to update global memory for block {}: {:?}", block_number, e
+                );
+                continue;
+            }
         }
     }
 
@@ -349,15 +356,7 @@ impl<N: NodePrimitives> CanonicalInMemoryState<N> {
             // clear all numbers
             numbers.clear();
 
-            // // drain all blocks and only keep the ones that are not persisted (below the persisted
-            // // height)
-            // let mut old_blocks = blocks
-            //     .drain()
-            //     .filter(|(_, b)| b.block_ref().recovered_block().number() > persisted_height)
-            //     .map(|(_, b)| b.block.clone())
-            //     .collect::<Vec<_>>();
-
-            // TODO(metis@ceasar): refactor the structure of blocks later
+            // TODO(brain@lazai): refactor the structure of blocks later
             let mut persisted_blocks = Vec::new();
             let mut old_blocks = Vec::new();
 
@@ -428,8 +427,8 @@ impl<N: NodePrimitives> CanonicalInMemoryState<N> {
         self.inner.chain_info_tracker.chain_info()
     }
 
-    pub fn global_latest_memory(&self) -> &GlobalConsistentMemory {
-        &self.inner.global_latest_memory
+    pub fn global_latest_memory(&self) -> GlobalConsistentMemory {
+        self.inner.global_latest_memory.clone()
     }
 
     /// Returns the latest canonical block number.
