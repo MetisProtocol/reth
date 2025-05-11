@@ -1,7 +1,4 @@
-use super::{
-    AccountReader, BlockHashReader, BlockIdReader, StateProofProvider, StateRootProvider,
-    StorageRootProvider,
-};
+use super::{AccountReader, BlockHashReader, BlockIdReader, GlobalConsistentMemory, StateProofProvider, StateRootProvider, StorageRootProvider};
 use alloc::boxed::Box;
 use alloy_consensus::constants::KECCAK_EMPTY;
 use alloy_eips::{BlockId, BlockNumberOrTag};
@@ -102,6 +99,7 @@ pub trait TryIntoHistoricalStateProvider {
     fn try_into_history_at_block(
         self,
         block_number: BlockNumber,
+        global_latest_memory: Option<GlobalConsistentMemory>,
     ) -> ProviderResult<StateProviderBox>;
 }
 

@@ -34,6 +34,13 @@ alloy-rpc-types-engine.workspace = true
 
 auto_impl.workspace = true
 
+# metis-sdk
+moka.workspace = true
+tracing.workspace = true
+
+log = "0.4.27"
+thiserror = "2.0.12"
+
 [features]
 default = ["std"]
 std = [

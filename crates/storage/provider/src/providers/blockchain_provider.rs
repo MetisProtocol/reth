@@ -35,10 +35,7 @@ use reth_primitives_traits::{
 };
 use reth_prune_types::{PruneCheckpoint, PruneSegment};
 use reth_stages_types::{StageCheckpoint, StageId};
-use reth_storage_api::{
-    BlockBodyIndicesProvider, DBProvider, NodePrimitivesProvider, OmmersProvider,
-    StateCommitmentProvider, StorageChangeSetReader,
-};
+use reth_storage_api::{BlockBodyIndicesProvider, DBProvider, NodePrimitivesProvider, OmmersProvider, ConsistentMemory, StateCommitmentProvider, StorageChangeSetReader};
 use reth_storage_errors::provider::ProviderResult;
 use reth_trie::HashedPostState;
 use reth_trie_db::StateCommitment;
@@ -142,7 +139,8 @@ impl<N: ProviderNodeTypes> BlockchainProvider<N> {
         state: &BlockState<N::Primitives>,
     ) -> ProviderResult<MemoryOverlayStateProvider<N::Primitives>> {
         let anchor_hash = state.anchor().hash;
-        let latest_historical = self.database.history_by_block_hash(anchor_hash)?;
+        let latest_historical = self.database.history_by_block_hash(
+            anchor_hash, self.canonical_in_memory_state.global_latest_memory())?;
         Ok(state.state_provider(latest_historical))
     }
 
@@ -547,7 +545,7 @@ impl<N: ProviderNodeTypes> StateProviderFactory for BlockchainProvider<N> {
 
         self.consistent_provider()?.get_in_memory_or_storage_by_block(
             block_hash.into(),
-            |_| self.database.history_by_block_hash(block_hash),
+            |_| self.database.history_by_block_hash(block_hash, self.canonical_in_memory_state.global_latest_memory()),
             |block_state| {
                 let state_provider = self.block_state_provider(block_state)?;
                 Ok(Box::new(state_provider))

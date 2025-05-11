@@ -5,9 +5,7 @@ use crate::{
 use alloy_primitives::{Address, BlockNumber, Bytes, StorageKey, StorageValue, B256};
 use reth_db_api::{cursor::DbDupCursorRO, tables, transaction::DbTx};
 use reth_primitives_traits::{Account, Bytecode};
-use reth_storage_api::{
-    DBProvider, StateCommitmentProvider, StateProofProvider, StorageRootProvider,
-};
+use reth_storage_api::{DBProvider, GlobalConsistentMemory, StateCommitmentProvider, StateProofProvider, StorageRootProvider};
 use reth_storage_errors::provider::{ProviderError, ProviderResult};
 use reth_trie::{
     proof::{Proof, StorageProof},
@@ -25,17 +23,19 @@ use reth_trie_db::{
 ///
 /// Wraps a [`DBProvider`] to get access to database.
 #[derive(Debug)]
-pub struct LatestStateProviderRef<'b, Provider>(&'b Provider);
+pub struct LatestStateProviderRef<'b, Provider>(&'b Provider, Option<GlobalConsistentMemory>);
 
 impl<'b, Provider: DBProvider> LatestStateProviderRef<'b, Provider> {
     /// Create new state provider
-    pub const fn new(provider: &'b Provider) -> Self {
-        Self(provider)
+    pub const fn new(provider: &'b Provider, globle_cache: Option<GlobalConsistentMemory>) -> Self {
+        Self(provider, globle_cache)
     }
 
     fn tx(&self) -> &Provider::Tx {
         self.0.tx_ref()
     }
+
+    fn global_cache(&self) -> &Option<GlobalConsistentMemory> { &self.1 }
 }
 
 impl<Provider: DBProvider> AccountReader for LatestStateProviderRef<'_, Provider> {
@@ -192,18 +192,18 @@ impl<Provider: StateCommitmentProvider> StateCommitmentProvider
 
 /// State provider for the latest state.
 #[derive(Debug)]
-pub struct LatestStateProvider<Provider>(Provider);
+pub struct LatestStateProvider<Provider>(Provider, Option<GlobalConsistentMemory>);
 
 impl<Provider: DBProvider + StateCommitmentProvider> LatestStateProvider<Provider> {
     /// Create new state provider
-    pub const fn new(db: Provider) -> Self {
-        Self(db)
+    pub fn new(db: Provider, cache: Option<GlobalConsistentMemory>) -> Self {
+        Self(db, cache)
     }
 
     /// Returns a new provider that takes the `TX` as reference
     #[inline(always)]
-    const fn as_ref(&self) -> LatestStateProviderRef<'_, Provider> {
-        LatestStateProviderRef::new(&self.0)
+    fn as_ref(&self) -> LatestStateProviderRef<'_, Provider> {
+        LatestStateProviderRef::new(&self.0, self.1.clone())
     }
 }
 
