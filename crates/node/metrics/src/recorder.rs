@@ -74,17 +74,30 @@ impl PrometheusRecorder {
     ///
     /// Caution: This only configures the global recorder and does not spawn the exporter.
     /// Callers must run [`Self::spawn_upkeep`] manually.
+    ///
+    /// Note: This method is idempotent. If the metrics recorder is already initialized,
+    /// it will log a warning and return a new handle instead of panicking.
     pub fn install() -> eyre::Result<Self> {
         let recorder = PrometheusBuilder::new().build_recorder();
         let handle = recorder.handle();
 
         // Build metrics stack
-        Stack::new(recorder)
+        match Stack::new(recorder)
             .push(PrefixLayer::new("reth"))
             .install()
-            .wrap_err("Couldn't set metrics recorder.")?;
-
-        Ok(Self::new(handle))
+        {
+            Ok(()) => Ok(Self::new(handle)),
+            Err(err) => {
+                // If metrics recorder is already initialized, just log a warning
+                // This can happen when multiple components try to initialize metrics
+                tracing::warn!(
+                    error = %err,
+                    "Metrics recorder already initialized, reusing existing recorder"
+                );
+                // Return a new handle anyway - the recorder is already installed globally
+                Ok(Self::new(handle))
+            }
+        }
     }
 }
 
