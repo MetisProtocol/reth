@@ -22,7 +22,7 @@ use reth_storage_api::StateProvider;
 pub use reth_storage_errors::provider::ProviderError;
 use reth_trie_common::{updates::TrieUpdates, HashedPostState};
 use revm::{
-    context::result::ExecutionResult,
+    context::result::{ExecutionResult, ResultAndState as RevmResultAndState},
     database::{states::bundle_state::BundleRetention, BundleState, State},
 };
 
@@ -369,6 +369,28 @@ pub trait BlockBuilder {
         self.execute_transaction_with_result_closure(tx, |_| ())
     }
 
+    /// Add a transaction to the block body without executing it.
+    ///
+    /// This is used when transactions have been pre-executed in parallel,
+    /// and we only need to add them to the block structure.
+    fn push_transaction_to_body(
+        &mut self,
+        tx: Recovered<TxTy<Self::Primitives>>,
+    ) -> Result<(), BlockExecutionError>;
+
+    /// Commit a pre-executed transaction result to the executor.
+    ///
+    /// This method takes the ResultAndState from parallel execution and commits it using
+    /// the executor's native commit_transaction, ensuring correct receipt generation,
+    /// gas accounting, and state updates including all edge cases.
+    ///
+    /// The HaltReason type must match the executor's Evm::HaltReason for type safety.
+    fn commit_executed_transaction(
+        &mut self,
+        out: RevmResultAndState<<<Self::Executor as BlockExecutor>::Evm as Evm>::HaltReason>,
+        tx: impl ExecutorTx<Self::Executor>,
+    ) -> Result<u64, BlockExecutionError>;
+
     /// Completes the block building process and returns the [`BlockBuilderOutcome`].
     fn finish(
         self,
@@ -549,6 +571,30 @@ where
     fn into_executor(self) -> Self::Executor {
         self.executor
     }
+
+    fn push_transaction_to_body(
+        &mut self,
+        tx: Recovered<TxTy<N>>,
+    ) -> Result<(), BlockExecutionError> {
+        self.transactions.push(tx);
+        Ok(())
+    }
+
+    fn commit_executed_transaction(
+        &mut self,
+        out: RevmResultAndState<<<Self::Executor as BlockExecutor>::Evm as Evm>::HaltReason>,
+        tx: impl ExecutorTx<Self::Executor>,
+    ) -> Result<u64, BlockExecutionError>
+    {
+        // Call reth's native commit_transaction to properly update:
+        // - receipts with correct cumulative gas
+        // - state with proper journal finalization
+        // - logs bloom
+        // - selfdestruct handling
+        // - created/recreated contracts
+        // This ensures proposer and validator compute identical block headers.
+        self.executor.commit_transaction(out, tx.as_executable())
+    }
 }
 
 /// A generic block executor that uses a [`BlockExecutor`] to
@@ -659,6 +705,93 @@ impl<TxEnv: Clone, T> ToTxEnv<TxEnv> for WithTxEnv<TxEnv, T> {
         self.tx_env.clone()
     }
 }
+
+// ============================================================================
+// Batch Execution Support (Metis Parallel Execution Integration)
+// ============================================================================
+
+/// Execution mode for batch transaction processing.
+///
+/// This enum allows executors to choose between traditional serial execution
+/// and optimized parallel execution modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    /// Traditional serial execution - transactions executed one by one
+    Serial,
+    /// Parallel execution with specified thread count using Block-STM algorithm
+    Parallel {
+        /// Number of threads to use for parallel execution
+        threads: core::num::NonZeroUsize,
+    },
+}
+
+/// Extension trait for batch transaction execution.
+///
+/// This trait extends [`BlockExecutor`] to support batch execution of multiple
+/// transactions in a single call, enabling parallel execution optimization.
+///
+/// The batch executor is responsible for:
+/// - Executing transactions (serially or in parallel based on mode)
+/// - Committing state changes in the correct order
+/// - Building receipts using native reth receipt builder
+/// - Maintaining semantic equivalence with serial execution
+pub trait BatchBlockExecutor: BlockExecutor {
+    /// Execute multiple transactions in batch mode.
+    ///
+    /// This method executes all transactions and returns aggregated results.
+    /// The execution can be serial or parallel based on the `mode` parameter.
+    ///
+    /// # Arguments
+    /// * `txs` - Slice of transactions to execute
+    /// * `mode` - Execution mode (Serial or Parallel)
+    ///
+    /// # Returns
+    /// Aggregated execution result including all receipts and state changes
+    ///
+    /// # Guarantees
+    /// - State changes are committed in transaction order
+    /// - Receipts have correct cumulative gas
+    /// - Post-execution hooks are NOT called (caller must call finish())
+    fn execute_transactions(
+        &mut self,
+        txs: &[Self::Transaction],
+        mode: ExecutionMode,
+    ) -> Result<BlockExecutionResult<Self::Receipt>, BlockExecutionError>;
+}
+
+/// Extension trait for block builder batch execution.
+///
+/// This trait extends [`BlockBuilder`] to support building blocks from
+/// batches of transactions, eliminating the need for per-transaction execution calls.
+pub trait BlockBuilderExt: BlockBuilder {
+    /// Execute multiple transactions in batch and add them to the block.
+    ///
+    /// This method:
+    /// 1. Executes all transactions via the executor's batch API
+    /// 2. Adds transactions to the block's transaction list
+    /// 3. Accumulates execution results (receipts, gas used, etc.)
+    ///
+    /// The caller must still call [`BlockBuilder::finish`] to apply post-execution
+    /// changes (block rewards, withdrawals) and finalize the block.
+    ///
+    /// # Arguments
+    /// * `txs` - Vector of transactions to execute and add
+    /// * `mode` - Execution mode (Serial or Parallel)
+    ///
+    /// # Returns
+    /// Ok(()) on success, or BlockExecutionError on failure
+    fn execute_transactions_batch<Tx>(
+        &mut self,
+        txs: Vec<Tx>,
+        mode: ExecutionMode,
+    ) -> Result<(), BlockExecutionError>
+    where
+        Tx: ExecutorTx<Self::Executor>;
+}
+
+// TODO: Implementation of BlockBuilderExt for BasicBlockBuilder
+// This requires resolving complex type system constraints.
+// For now, implementations will be provided in downstream crates (e.g., metis-sdk).
 
 #[cfg(test)]
 mod tests {
